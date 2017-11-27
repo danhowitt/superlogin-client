@@ -31,20 +31,20 @@ export type ConfigurationOptions = {
 }
 
 export interface SuperLoginClient extends EventEmitter2 {
-	configure: (options: ConfigurationOptions) => void;
+	configure: (options: ConfigurationOptions) => Promise<void>;
 	authenticated: () => boolean;
 	authenticate: () => Promise<any>;
 	getConfig: () => ConfigurationOptions;
 	validateSession: () => void;
-	getSession: () => Session;
-	setSession: (session: Session) => void;
-	deleteSession: () => void;
+	getSession: () => Promise<Session>;
+	setSession: (session: Session) => Promise<void>;
+	deleteSession: () => Promise<void>;
 	getDbUrl: (dbName: string) => string;
 	confirmRole: (role: string) => boolean;
 	confirmAnyRole: (possibleRoles: string[]) => boolean;
 	confirmAllRoles: (requiredRoles: string[]) => boolean;
-	refresh: () => void;
-	checkRefresh: () => void;
+	refresh: () => Promise<void>;
+	checkRefresh: () => Promise<void>;
 	checkExpired: () => void;
 	login: (login: { username: string, password: string }) => Promise<any>;
 	register: (register: { username?: string, name?: string, email?: string, password: string, confirmPassword: string, [key: string]: any }) => Promise<any>;

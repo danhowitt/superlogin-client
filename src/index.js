@@ -115,41 +115,45 @@ class Superlogin extends EventEmitter2 {
 		this._config = config;
 
 		// Setup the new session
-		this._session = JSON.parse(this.storage.getItem('superlogin.session'));
-
-		this._httpInterceptor();
-
-		// Check expired
-		if (config.checkExpired) {
-			this.checkExpired();
-			this.validateSession()
-				.then(() => {
-					this._onLogin(this._session);
-				})
-				.catch(() => {
-					// ignoring
-				});
-		}
+		// support storage of session async or sync
+		return Promise.resolve(this.storage.getItem('superlogin.session'))
+			.then(rawSession => {
+				this._session = JSON.parse(rawSession);
+				this._httpInterceptor();
+				// Check expired
+				if (config.checkExpired) {
+					this.checkExpired();
+					this.validateSession()
+						.then(() => {
+							this._onLogin(this._session);
+						})
+						.catch(() => {
+							// ignoring
+						});
+				}
+			});
 	}
 
 	_httpInterceptor() {
 		const request = req => {
 			const config = this.getConfig();
-			const session = this.getSession();
-			if (!session || !session.token) {
-				return Promise.resolve(req);
-			}
 
 			if (req.skipRefresh) {
 				return Promise.resolve(req);
 			}
 
-			return this.checkRefresh().then(() => {
-				if (checkEndpoint(req.url, config.endpoints)) {
-					req.headers.Authorization = `Bearer ${session.token}:${session.password}`;
-				}
-				return req;
-			});
+			return this.checkRefresh()
+				.then(() => this.getSession())
+				.then(session => {
+					if (!session || !session.token) {
+						return Promise.resolve(req);
+					}
+
+					if (checkEndpoint(req.url, config.endpoints)) {
+						req.headers.Authorization = `Bearer ${session.token}:${session.password}`;
+					}
+					return req;
+				});
 		};
 
 		const responseError = error => {
@@ -165,7 +169,7 @@ class Superlogin extends EventEmitter2 {
 			if (checkEndpoint(error.config.url, config.endpoints) &&
 				error.response && error.response.status === 401 && this.authenticated()) {
 				debug.warn('Not authorized');
-				this._onLogout('Session expired');
+				return this._onLogout('Session expired');
 			}
 			return Promise.reject(error);
 		};
@@ -198,20 +202,34 @@ class Superlogin extends EventEmitter2 {
 
 	getSession() {
 		if (!this._session) {
-			this._session = JSON.parse(this.storage.getItem('superlogin.session'));
+			return Promise.resolve(this.storage.getItem('superlogin.session'))
+				.then(rawSession => {
+					this._session = JSON.parse(rawSession);
+					return this._session ? Object.assign(this._session) : null;
+				});
 		}
-		return this._session ? Object.assign(this._session) : null;
+
+		return Promise.resolve(this._session ? Object.assign(this._session) : null);
+
+		// if (!this._session) {
+		// 	this._session = JSON.parse(this.storage.getItem('superlogin.session'));
+		// }
+		// return this._session ? Object.assign(this._session) : null;
 	}
 
 	setSession(session) {
 		this._session = session;
-		this.storage.setItem('superlogin.session', JSON.stringify(this._session));
-		debug.info('New session set');
+		return Promise.resolve(this.storage.setItem('superlogin.session', JSON.stringify(this._session)))
+			.then(() => {
+				debug.info('New session set');
+			});
 	}
 
 	deleteSession() {
-		this.storage.removeItem('superlogin.session');
-		this._session = null;
+		return Promise.resolve(this.storage.removeItem('superlogin.session'))
+			.then(() => {
+				this._session = null;
+			});
 	}
 
 	getDbUrl(dbName) {
@@ -284,7 +302,7 @@ class Superlogin extends EventEmitter2 {
 	checkExpired() {
 		// This is not necessary if we are not authenticated
 		if (!this.authenticated()) {
-			return;
+			return Promise.resolve();
 		}
 		const expires = this._session.expires;
 		let timeDiff = this._session.serverTimeDiff || 0;
@@ -294,39 +312,44 @@ class Superlogin extends EventEmitter2 {
 		}
 		const estimatedServerTime = Date.now() + timeDiff;
 		if (estimatedServerTime > expires) {
-			this._onLogout('Session expired');
+			return this._onLogout('Session expired');
 		}
+		return Promise.resolve();
 	}
 
 	refresh() {
-		const session = this.getSession();
-		this._refreshInProgress = true;
-		return this._http.post(`${this._config.baseUrl}/refresh`, {})
-			.then(res => {
-				this._refreshInProgress = false;
-				if (res.data.token && res.data.expires) {
-					Object.assign(session, res.data);
-					this.setSession(session);
-					this._onRefresh(session);
-				}
-				return session;
-			})
-			.catch(err => {
-				this._refreshInProgress = false;
-				throw parseError(err);
+		return this.getSession()
+			.then(session => {
+				this._refreshInProgress = true;
+				return this._http.post(`${this._config.baseUrl}/refresh`, {})
+					.then(res => {
+						this._refreshInProgress = false;
+						if (res.data.token && res.data.expires) {
+							Object.assign(session, res.data);
+							this.setSession(session);
+							this._onRefresh(session);
+						}
+						return session;
+					})
+					.catch(err => {
+						this._refreshInProgress = false;
+						throw parseError(err);
+					});
 			});
 	}
 
 	authenticate() {
 		return new Promise(resolve => {
-			const session = this.getSession();
-			if (session) {
-				resolve(session);
-			} else {
-				this.on('login', newSession => {
-					resolve(newSession);
+			this.getSession()
+				.then(session => {
+					if (session) {
+						 resolve(session);
+					} else {
+						this.on('login', newSession => {
+							resolve(newSession);
+						});
+					}
 				});
-			}
 		});
 	}
 
@@ -338,13 +361,14 @@ class Superlogin extends EventEmitter2 {
 		return this._http.post(`${this._config.baseUrl}/login`, credentials, { skipRefresh: true })
 			.then(res => {
 				res.data.serverTimeDiff = res.data.issued - Date.now();
-				this.setSession(res.data);
-				this._onLogin(res.data);
-				return res.data;
+				return this.setSession(res.data)
+					.then(() => {
+						this._onLogin(res.data);
+						return res.data;
+					});
 			})
 			.catch(err => {
 				this.deleteSession();
-
 				throw parseError(err);
 			});
 	}
@@ -354,8 +378,11 @@ class Superlogin extends EventEmitter2 {
 			.then(res => {
 				if (res.data.user_id && res.data.token) {
 					res.data.serverTimeDiff = res.data.issued - Date.now();
-					this.setSession(res.data);
-					this._onLogin(res.data);
+					return this.setSession(res.data).then(() => {
+						this._onLogin(res.data);
+						this._onRegister(registration);
+						return res.data;
+					});
 				}
 				this._onRegister(registration);
 				return res.data;
@@ -367,10 +394,7 @@ class Superlogin extends EventEmitter2 {
 
 	logout(msg) {
 		return this._http.post(`${this._config.baseUrl}/logout`, {})
-			.then(res => {
-				this._onLogout(msg || 'Logged out');
-				return res.data;
-			})
+			.then(() => this._onLogout(msg || 'Logged out'))
 			.catch(err => {
 				this._onLogout(msg || 'Logged out');
 				if (!err.response || err.response.data.status !== 401) {
@@ -381,10 +405,7 @@ class Superlogin extends EventEmitter2 {
 
 	logoutAll(msg) {
 		return this._http.post(`${this._config.baseUrl}/logout-all`, {})
-			.then(res => {
-				this._onLogout(msg || 'Logged out');
-				return res.data;
-			})
+			.then(() => this._onLogout(msg || 'Logged out'))
 			.catch(err => {
 				this._onLogout(msg || 'Logged out');
 				if (!err.response || err.response.data.status !== 401) {
@@ -448,11 +469,12 @@ class Superlogin extends EventEmitter2 {
 			return Promise.reject({ error: `Provider ${provider} not supported.` });
 		}
 		if (this.authenticated()) {
-			const session = this.getSession();
-			const token = `bearer_token=${session.token}:${session.password}`;
-			const linkURL = `${this._config.socialUrl}/link/${provider}?${token}`;
-			const windowTitle = `Link your account to ${capitalizeFirstLetter(provider)}`;
-			return this._oAuthPopup(linkURL, { windowTitle });
+			return this.getSession().then(session => {
+				const token = `bearer_token=${session.token}:${session.password}`;
+				const linkURL = `${this._config.socialUrl}/link/${provider}?${token}`;
+				const windowTitle = `Link your account to ${capitalizeFirstLetter(provider)}`;
+				return this._oAuthPopup(linkURL, { windowTitle });
+			});
 		}
 		return Promise.reject({ error: 'Authentication required' });
 	}
@@ -587,9 +609,11 @@ class Superlogin extends EventEmitter2 {
 	}
 
 	_onLogout(msg) {
-		this.deleteSession();
-		debug.info('Logout', msg);
-		this.emit('logout', msg);
+		return this.deleteSession()
+			.then(() => {
+				debug.info('Logout', msg);
+				this.emit('logout', msg);
+			});
 	}
 
 	_onLink(msg) {
