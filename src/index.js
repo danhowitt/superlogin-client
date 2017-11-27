@@ -397,6 +397,9 @@ class Superlogin extends EventEmitter2 {
 			.then(() => this._onLogout(msg || 'Logged out'))
 			.catch(err => {
 				this._onLogout(msg || 'Logged out');
+				if (!err) {
+					return;
+				}
 				if (!err.response || err.response.data.status !== 401) {
 					throw parseError(err);
 				}
