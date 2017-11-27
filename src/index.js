@@ -312,7 +312,7 @@ class Superlogin extends EventEmitter2 {
 		}
 		const estimatedServerTime = Date.now() + timeDiff;
 		if (estimatedServerTime > expires) {
-			return this._onLogout('Session expired');
+			this._onLogout('Session expired');
 		}
 		return Promise.resolve();
 	}
@@ -609,7 +609,7 @@ class Superlogin extends EventEmitter2 {
 	}
 
 	_onLogout(msg) {
-		return this.deleteSession()
+		this.deleteSession()
 			.then(() => {
 				debug.info('Logout', msg);
 				this.emit('logout', msg);
